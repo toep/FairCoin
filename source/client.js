@@ -29,7 +29,7 @@ module.exports = class Client extends EventEmitter {
     this.broadcast = broadcast;
 
     this.wallet = new Wallet();
-
+    
     // Clients will listen for any funds given to them.
     // They will optimistically assume that all transactions
     // will be accepted and finalized.
@@ -95,9 +95,9 @@ module.exports = class Client extends EventEmitter {
    * Accepts payment and adds it to the client's wallet.
    */
   receiveOutput(tx) {
-    tx.outputs.forEach(output => {
+    tx.outputs.forEach((output, i) => {
       if (this.wallet.hasKey(output.address)) {
-        this.wallet.addUTXO(output);
+        this.wallet.addUTXO(output, tx.id, i);
       }
     });
   }

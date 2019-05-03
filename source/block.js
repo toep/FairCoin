@@ -7,8 +7,9 @@ const Transaction = require('./transaction.js');
 const utils = require('./utils.js');
 
 const POW_BASE_TARGET = new BigInteger("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", 16);
-const POW_TARGET = POW_BASE_TARGET.shiftRight(15);
-const COINBASE_AMT_ALLOWED = 25;
+const NUM_ZEROES_DEFAULT = 20;
+const POW_TARGET = POW_BASE_TARGET.shiftRight(NUM_ZEROES_DEFAULT);
+const COINBASE_AMT_ALLOWED = 10;
 
 /**
  * A block is a collection of transactions, with a hash connecting it
@@ -61,6 +62,7 @@ module.exports = class Block {
     b.prevBlockHash = o.prevBlockHash;
     b.timestamp = o.timestamp;
     b.proof = o.proof;
+    b.target = new BigInteger(o.target);
     b.chainLength = parseInt(o.chainLength);
 
     // Serializing the UTXOs simplifies things, but should probably be eliminated.
@@ -75,6 +77,12 @@ module.exports = class Block {
       b.transactions.set(txID, tx);
     });
     return b;
+  }
+
+  static determineTargetBasedOnCoinAge(coinAge) {
+    //clamp coinage to 4 max
+    coinAge = Math.min(4, coinAge);
+    return POW_BASE_TARGET.shiftRight(NUM_ZEROES_DEFAULT-Math.floor(coinAge));
   }
 
   /**
@@ -112,7 +120,7 @@ module.exports = class Block {
 
     // Add the initial coinbase reward.
     if (rewardAddr) {
-      let output = { address: rewardAddr, amount: COINBASE_AMT_ALLOWED};
+      let output = { address: rewardAddr, amount: COINBASE_AMT_ALLOWED, chainNum: this.chainLength};
       // The coinbase transaction will be updated to capture transaction fees.
       this.coinbaseTX = new Transaction({ outputs: [output] });
       this.addTransaction(this.coinbaseTX, true);
@@ -132,9 +140,12 @@ module.exports = class Block {
    * Returns true if the hash of the block is less than the target
    * proof of work value.
    */
-  verifyProof() {
+  verifyProof(shouldPrint=null) {
     let h = utils.hash(this.serialize());
     let n = new BigInteger(h, 16);
+    if(shouldPrint !== null) {
+      //console.log(`compare ${n} to ${this.target}`);
+    }
     return n.compareTo(this.target) < 0;
   }
 
@@ -188,21 +199,34 @@ module.exports = class Block {
     if (!forceAccept && !this.willAcceptTransaction(tx)) {
       throw new Error(`Transaction ${tx.id} is invalid.`);
     }
-    //
-    // **YOUR CODE HERE**
-    //
+    
     this.transactions[tx.id] = tx;
     let txFee = 0;
     tx.inputs.forEach((input) => {
       let txUXTOs = this.utxos[input.txID];
+      //console.log(txUXTOs);
+     // console.log(input.outputIndex);
       if (txUXTOs[input.outputIndex]) {
         txFee += txUXTOs[input.outputIndex].amount;
-        this.utxos[input.txID].splice(input.outputIndex, 1);
+        //console.log(`removing txid ${input.txID} at outputIndex ${input.outputIndex}`);
+        this.utxos[input.txID][input.outputIndex].address = 0;
+        for(let i = 0; i < this.utxos[input.txID].length; i++) {
+          if(this.utxos[input.txID][i].address !== 0) break;
+          if(i === this.utxos[input.txID].length-1){
+            this.utxos[input.txID] = [];
+          }
+        }
+        //this.utxos[input.txID].splice(input.outputIndex, 1);
+        //decrease the outputIndex.. 
+      }
+      else {
+        throw new Error("txUXTOs[input.outputIndex] not valid");
       }
     });
 
     this.utxos[tx.id] = [];
     tx.outputs.forEach((output, txID) => {
+      output.chainNum = this.chainLength;
       this.utxos[tx.id][txID] = output;
       txFee -= output.amount;
     });
@@ -266,5 +290,54 @@ module.exports = class Block {
         console.log(JSON.stringify(utxo));
       });
     });
+  }
+
+  /**
+   * 
+   * @param {String} address your self address
+   * @param {number} amount how much to spend, will be sent back to self again
+   * @param {List} inputs a list of inputs
+   */
+  spendCoinAge(address, amount, inputs) {
+    //console.log(`spendCoinage input: ${inputs}`);
+    //console.log("coinage will send me " + amount + " coins");
+    let output = { address, amount, chainNum: this.chainLength};
+    let coinageTx = new Transaction({ outputs: [output], inputs: inputs});
+    this.addTransaction(coinageTx, true);
+    return coinageTx;
+  }
+
+  /**
+   * Returns a list of all valid utxos belonging to the wallet
+   * @param {Wallet} wallet 
+   */
+  getAllUTXOsBelongingTo(wallet) {
+    let validAddresses = [];
+    Object.keys(this.utxos).forEach(txID => {
+      let txUTXOs = this.utxos[txID];
+      txUTXOs.forEach(utxo => {
+      if(wallet.hasKey(utxo.address)) {
+        validAddresses.push(utxo);
+      }
+      });
+    });
+    return validAddresses;
+  }
+
+  /**
+   * Returns a list of all valid and verified utxos belonging to the wallet
+   * @param {Wallet} wallet 
+   */
+  getAllAgedUTXOsBelongingTo(wallet) {
+    let validAddresses = [];
+    Object.keys(this.utxos).forEach(txID => {
+      let txUTXOs = this.utxos[txID];
+      txUTXOs.forEach(utxo => {
+      if(wallet.hasKey(utxo.address) && utxo.chainNum < this.chainLength) {
+        validAddresses.push(utxo);
+      }
+      });
+    });
+    return validAddresses;
   }
 }

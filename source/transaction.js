@@ -40,7 +40,6 @@ module.exports = class Transaction {
   constructor({outputs, inputs=[]}) {
     this.inputs = inputs;
     this.outputs = outputs;
-
     // The id is determined at creation and remains constant,
     // even if outputs change.  (This case should only come up
     // with coinbase transactions).

@@ -3,6 +3,8 @@
 const keypair = require('keypair');
 
 const utils = require('./utils.js')
+//let Client = require('./client.js');
+//let Miner = require('./miner.js');
 
 /**
  * A wallet is a collection of "coins", where a coin is defined as
@@ -41,6 +43,29 @@ module.exports = class Wallet {
    */
   get balance() {
     return this.coins.reduce((acc, {output}) => acc + output.amount, 0);
+  }
+  
+
+  /**
+   * Returns the total balance according to a miners blockchain
+   * @param {Miner} miner - the miner that has the blockchain
+   */
+  balanceOnChain(miner) {
+    let block = miner.currentBlock;
+    let chainLength = block.chainLength;
+    let total = 0;
+
+    Object.keys(block.utxos).forEach(txID => {
+      let txUTXOs = block.utxos[txID];
+      txUTXOs.forEach(utxo => {
+        if(this.hasKey(utxo.address) && utxo.chainNum < chainLength) {
+          //console.log(utxo.amount);
+          total += utxo.amount;
+        }
+        //console.log(JSON.stringify(utxo));
+      });
+    });
+    return total;
   }
 
   /**
@@ -90,9 +115,6 @@ module.exports = class Wallet {
     }
 
     //each coins should contain { txID, outputIndex, pubKey, sig } 
-    //
-    // **YOUR CODE HERE**
-    //
     let needed = [];
     for(let i = 0; i < this.coins.length; i++) {
       if(amount > 0) {
@@ -101,46 +123,58 @@ module.exports = class Wallet {
         c.sig = utils.sign(this.addresses[c.output.address].private, c.output);
         needed.push(c);
         amount -= c.output.amount;
-        delete c.output;
+        //delete c.output;
       }
       else {
         break;
       }
     }
     needed.forEach(element => {
-      this.coins.splice(this.coins.indexOf(element), 1);
+      //this.coins.splice(this.coins.indexOf(element), 1);
     });
 
     return {inputs: needed, changeAmt: -amount};
 
   }
 
-  spendUTXOsFully(amount) {
+  spendUTXOsFully(amount, miner) {
+    const expected = amount;
     if (amount > this.balance) {
       throw new Error(`Insufficient funds.  Requested ${amount}, but only ${this.balance} is available.`);
     }
-
+    let block = miner.currentBlock;
+    let validUTXOs = block.getAllAgedUTXOsBelongingTo(this);
+    let validAddresses = validUTXOs.map(utxo => utxo.address);
     //each coins should contain { txID, outputIndex, pubKey, sig } 
-
+    //console.log(validUTXOs);
+    //console.log(this.coins);
     let needed = [];
     for(let i = 0; i < this.coins.length; i++) {
       if(amount > 0) {
         let c = this.coins[i];
-        c.pubKey = this.addresses[c.output.address].public;
-        c.sig = utils.sign(this.addresses[c.output.address].private, c.output);
-        needed.push(c);
-        amount -= c.output.amount;
-        delete c.output;
+
+
+        if(validAddresses.indexOf(c.output.address) > -1) {
+          c.pubKey = this.addresses[c.output.address].public;
+          c.sig = utils.sign(this.addresses[c.output.address].private, c.output);
+          needed.push(c);
+          amount -= c.output.amount;
+          //delete c.output;
+         // console.log(`Adding coin ${c.output.address} worth ${c.output.amount}`);
+        }
+        else {
+          //console.log(`coin ${c.output.address} is not on the block yet. cannot spend`);
+        }
       }
       else {
         break;
       }
     }
     needed.forEach(element => {
-      this.coins.splice(this.coins.indexOf(element), 1);
+      //this.coins.splice(this.coins.indexOf(element), 1);
     });
 
-    return {inputs: needed};
+    return {inputs: needed, totalSpent: expected-amount};
 
   }
 
@@ -161,14 +195,26 @@ module.exports = class Wallet {
     return this.eligibility_address;
   }
 
-  saveElibilityProof() {
+  saveEligibilityProof(block) {
+    let utxos = block.getAllUTXOsBelongingTo(this);
     let total_add = "";
-    let keys = Object.keys(this.addresses)
-    //let keys =[ ...this.addresses.keys() ];
-    for(const k of keys) {
-      total_add = this.addresses[k].public;
-    }
+    //console.log(`eligibility check, utxos: ${utxos}`);
+    utxos.forEach(utxo => {
+      total_add += utxo.address;
+    });
+    if(total_add === "") total_add = "12345";//for miners with no coins
+    //console.log('eligibiliy address = ' + total_add);
     this.eligibility_address = total_add;
+  }
+
+  getCoinAgeOfWalletOnChain(miner) {
+    let block = miner.currentBlock;
+    let utxos = block.getAllAgedUTXOsBelongingTo(this);
+    let total = 0;
+    utxos.forEach(utxo => {
+      total += coinAgeOf(utxo, block);
+    });
+    return total;
   }
 
   /**
@@ -181,4 +227,8 @@ module.exports = class Wallet {
   hasKey(address) {
     return !!this.addresses[address];
   }
+}
+
+function coinAgeOf(utxo, block) {
+  return utxo.amount/1000.0 * (block.chainLength - utxo.chainNum-1)
 }
