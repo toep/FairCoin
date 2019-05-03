@@ -3,8 +3,6 @@
 const keypair = require('keypair');
 
 const utils = require('./utils.js')
-//let Client = require('./client.js');
-//let Miner = require('./miner.js');
 
 /**
  * A wallet is a collection of "coins", where a coin is defined as
@@ -38,17 +36,19 @@ module.exports = class Wallet {
 
   /**
    * Return the total balance of all UTXOs.
-   * 
+   * @deprecated This balance does not correctly reflect the blockchain balance.
+   *              Use balanceOnChain with a miner to get the actual balance
    * @returns The total number of coins in the wallet.
    */
   get balance() {
     return this.coins.reduce((acc, {output}) => acc + output.amount, 0);
   }
-  
 
   /**
-   * Returns the total balance according to a miners blockchain
    * @param {Miner} miner - the miner that has the blockchain
+   * 
+   * @returns the total balance according to a miners blockchain
+   *           excuding any transactions not yet verified
    */
   balanceOnChain(miner) {
     let block = miner.currentBlock;
@@ -59,10 +59,8 @@ module.exports = class Wallet {
       let txUTXOs = block.utxos[txID];
       txUTXOs.forEach(utxo => {
         if(this.hasKey(utxo.address) && utxo.chainNum < chainLength) {
-          //console.log(utxo.amount);
           total += utxo.amount;
         }
-        //console.log(JSON.stringify(utxo));
       });
     });
     return total;
@@ -95,11 +93,9 @@ module.exports = class Wallet {
    * Returns inputs to spend enough UTXOs to meet or exceed the specified
    * amount of coins.
    * 
-   * Calling this method also **deletes** the UTXOs used. This approach
-   * optimistically assumes that the transaction will be accepted.  Just
-   * in case, the keys are not deleted.  From the blockchain and the
-   * key pair, the wallet can manually recreate the UTXO if it fails to
-   * be created.
+   * Calling this method does **not** delete the UTXOs used. The wallet keeps a
+   * history of all transaction coins. If a user tries to double spend, the miner
+   * accepting the tx will flag it and remove it from the chain.
    * 
    * If the amount requested exceeds the available funds, an exception is
    * thrown.
@@ -123,22 +119,37 @@ module.exports = class Wallet {
         c.sig = utils.sign(this.addresses[c.output.address].private, c.output);
         needed.push(c);
         amount -= c.output.amount;
-        //delete c.output;
       }
       else {
         break;
       }
     }
-    needed.forEach(element => {
-      //this.coins.splice(this.coins.indexOf(element), 1);
-    });
 
     return {inputs: needed, changeAmt: -amount};
 
   }
 
+  /**
+   * Use this function for coin-age transactions only
+   * Returns inputs to spend enough UTXOs to  or exceed the specified
+   * amount of coins. Does not allow for change. the full amount will be spent.
+   * 
+   * Calling this method does **not** delete the UTXOs used. The wallet keeps a
+   * history of all transaction coins. If a user tries to double spend, the miner
+   * accepting the tx will flag it and remove it from the chain.
+   * 
+   * If the amount requested exceeds the available funds, an exception is
+   * thrown.
+   * 
+   * @param {number} amount - The amount that is desired to spend.
+   * 
+   * @returns An object containing an array of inputs that meet or exceed
+   *    the amount required, and the amount of change left over.
+   */
   spendUTXOsFully(amount, miner) {
     const expected = amount;
+
+    //TODO: Don't use this.balance to check here. Might be invalid depending on the state of the wallet
     if (amount > this.balance) {
       throw new Error(`Insufficient funds.  Requested ${amount}, but only ${this.balance} is available.`);
     }
@@ -146,33 +157,25 @@ module.exports = class Wallet {
     let validUTXOs = block.getAllAgedUTXOsBelongingTo(this);
     let validAddresses = validUTXOs.map(utxo => utxo.address);
     //each coins should contain { txID, outputIndex, pubKey, sig } 
-    //console.log(validUTXOs);
-    //console.log(this.coins);
     let needed = [];
     for(let i = 0; i < this.coins.length; i++) {
       if(amount > 0) {
         let c = this.coins[i];
-
-
         if(validAddresses.indexOf(c.output.address) > -1) {
           c.pubKey = this.addresses[c.output.address].public;
           c.sig = utils.sign(this.addresses[c.output.address].private, c.output);
           needed.push(c);
           amount -= c.output.amount;
-          //delete c.output;
-         // console.log(`Adding coin ${c.output.address} worth ${c.output.amount}`);
         }
         else {
-          //console.log(`coin ${c.output.address} is not on the block yet. cannot spend`);
+          // Coin is not on the block yet or is already spent. Ignoring.
+          //TODO: Update the wallet if the coin is spent...
         }
       }
       else {
         break;
       }
     }
-    needed.forEach(element => {
-      //this.coins.splice(this.coins.indexOf(element), 1);
-    });
 
     return {inputs: needed, totalSpent: expected-amount};
 
@@ -191,20 +194,26 @@ module.exports = class Wallet {
     return addr;
   }
 
+  /**
+   * @returns the address for determining eligibility to mint. Calcualted in saveEligibilityProof
+   */
   getEligibilityAddress() {
     return this.eligibility_address;
   }
 
+  /**
+   * Saves the eligibility proof in this.eligibility_address
+   * @param {Block} block 
+   */
   saveEligibilityProof(block) {
     let utxos = block.getAllUTXOsBelongingTo(this);
     let total_add = "";
-    //console.log(`eligibility check, utxos: ${utxos}`);
     utxos.forEach(utxo => {
       total_add += utxo.address;
     });
-    if(total_add === "") total_add = "12345";//for miners with no coins
-    //console.log('eligibiliy address = ' + total_add);
-    this.eligibility_address = total_add;
+    // For miners with no coins
+    if(total_add === "") total_add = "12345";
+    this.eligibility_address = utils.hash(total_add);
   }
 
   getCoinAgeOfWalletOnChain(miner) {

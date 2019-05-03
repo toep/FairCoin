@@ -9,8 +9,8 @@ const PROOF_FOUND = "PROOF_FOUND";
 const START_MINING = "START_MINING";
 const INIT_MINTING = "INIT_MINTING";
 const POST_TRANSACTION = "POST_TRANSACTION";
-const TIME_UNTIL_ELIGIBILITY_DECREASE = 30000;
-const MINT_ELEGIBILITY_DIFFICULTY = 3;//2 bits matching, 1/2^2 chance of eligible
+const TIME_UNTIL_ELIGIBILITY_DECREASE = 30000; //30 seconds between decrease
+const MINT_ELEGIBILITY_DIFFICULTY = 3;//3 bits matching, 1/2^3 chance of eligible
 
 /**
  * Miners are clients, but they also mine blocks looking for "proofs".
@@ -29,7 +29,6 @@ module.exports = class Miner extends Client {
   constructor(name, broadcast) {
     super(broadcast);
 
-    // Used for debugging only.
     this.name = name;
     this.mint_elegibility_diff_dyn = MINT_ELEGIBILITY_DIFFICULTY;
     this.previousBlocks = {};
@@ -64,7 +63,7 @@ module.exports = class Miner extends Client {
     if(this.shouldStartNewBlock) {
       this.mint_elegibility_diff_dyn = MINT_ELEGIBILITY_DIFFICULTY;
       clearTimeout(this.mintingTimeout);
-      // Creating a new address for receiving coinbase rewards.
+        // Creating a new address for receiving coinbase rewards.
         // We reuse the old address if 
         if (!reuseRewardAddress) {
           this.rewardAddress = this.wallet.makeAddress();
@@ -81,12 +80,13 @@ module.exports = class Miner extends Client {
         this.currentBlock.proof = 0;
         this.shouldStartNewBlock = false;
 
+        //create address to spend coin-age
         let selfAddr = this.wallet.makeAddress();
         this.log("balance: " + this.wallet.balanceOnChain(this));
-        //this.log(`Creating a coinage tx ${selfAddr}`);
         this.currentBlock.target = Block.determineTargetBasedOnCoinAge(this.wallet.getCoinAgeOfWalletOnChain(this));
-        //this.log(`my coinage is ${this.wallet.getCoinAgeOfWalletOnChain(this)}`);
         this.log(`Will use target difficulty of ${20-Math.min(4, Math.floor(this.wallet.getCoinAgeOfWalletOnChain(this)))}`);
+        // Spend all miners balance on coin-age transaction
+        // Will get all back, no fee. It is just to spend the coin-age.
         let {inputs, totalSpent} = this.wallet.spendUTXOsFully(this.wallet.balanceOnChain(this), this);
         if(totalSpent === 0) throw new Error("Miner not able to spend any coinage.. can't mine");
         let coinageTX = this.currentBlock.spendCoinAge(selfAddr, totalSpent, inputs);
@@ -126,8 +126,6 @@ module.exports = class Miner extends Client {
 
       if(this.isValidBlock(this.currentBlock)) {
         this.log("\x1b[32mFound proof. Starting new block.\x1b[0m");
-        //this.log("winning block timestamp: " + this.currentBlock.timestamp);
-        //this.log("winning miner current timestamp " + Date.now());
         this.receiveOutput(this.currentBlock.coinbaseTX);
         this.announceProof();
         this.shouldMine = false;
@@ -161,33 +159,22 @@ module.exports = class Miner extends Client {
    */
   isValidBlock(b, miner = null) {
     if(miner !== null) {
-      //Checking for minting elegibiity based on timestamp
-      // Need to validate that the blocks timestamp is not tampered with
+     
       let currentTime = Date.now();
-      // Take the max of me and other to use as timestamp
-      // This makes it so that a bad miner can't use old timestamp...
-      let blockTimestamp = b.timestamp;//this.previousBlocks[this.currentBlock.prevBlockHash].timestamp
-  // b.timestamp
-      //this.log(`block to check.. pbh: ${b.prevBlockHash} Chain: ${b.chainLength}`)
-      //this.log("winning block timestamp: " + b.timestamp);
-      //this.log("winning miner current timestamp " + currentTime);
-      let diff = currentTime - blockTimestamp + 1000; //allow for 1 second delay
-      //this.log(`time diff: ${diff}`);
+      //Checking for minting elegibiity based on timestamp
+      //TODO: Need to validate that the blocks timestamp is not tampered with
+      let blockTimestamp = b.timestamp;
+
+      let diff = currentTime - blockTimestamp + 100; //allow for 100 ms error
       let minMintingDifficulty = MINT_ELEGIBILITY_DIFFICULTY - Math.floor(diff/TIME_UNTIL_ELIGIBILITY_DECREASE);
-      //this.log(`minting difficulty to check: ${minMintingDifficulty}`);
-      //TODO: make sure miner hasn't modified isEligibeToMint
-      if(isEligibileToMint(miner, b, minMintingDifficulty)) {
-        //all good
-      }
-      else {
-        this.log(`"\x1b[41m"!!!!!!!miner ${miner.name} is not allowed to mint at this time!\x1b[0m`);
-        throw new Error("invalid proof. miner is not allowed to mint");
-        return false;
+
+      if(!isEligibileToMint(miner, b, minMintingDifficulty)) {
+        this.log(`\x1b[41m Miner ${miner.name} is not allowed to mint at this time!\x1b[0m`);
+        throw new Error("invalid proof. Miner is not allowed to mint");
       }
     }
     // FIXME: Should verify that a block chains back to a previously accepted block.
-    if (!b.verifyProof(miner)) {
-      //this.log(`Invalid proof.`);
+    if (!b.verifyProof()) {
       return false;
     }
     return true;
@@ -203,13 +190,9 @@ module.exports = class Miner extends Client {
   receiveBlock({block: s, miner}) {
     let b = Block.deserialize(s);
 
-    //this.log("This is the blockchains utxos:");
-    //b.displayUTXOs();
-
     // FIXME: should not rely on the other block for the utxos.
     if (!this.isValidBlock(b, miner)) {
-      //this.log(`rejecting invalid block: ${s}`);
-      this.log(`!rejecting invalid block!`);
+      this.log(`Rejecting invalid block!`);
       return false;
     }
 
@@ -220,7 +203,7 @@ module.exports = class Miner extends Client {
 
     // We switch over to the new chain only if it is better.
     if (b.chainLength >= this.currentBlock.chainLength && this !== miner) {
-      this.log(`cutting over to new chain.`);
+      this.log(`Cutting over to new chain.`);
       this.currentBlock = b;
       this.shouldStartNewBlock = true;
       this.startNewSearch(true);
@@ -271,14 +254,7 @@ function countMatchingBits(string1, string2) {
 }
 
 function isEligibileToMint(miner, b, target) {
-  //everyone can mint from the genesis block
-  //if(b.previousBlocks[b.prevBlockHash].isGenesisBlock()) return true;
-  //miner.log(b.prevBlockHash);
   let cbh = text2Binary(b.prevBlockHash);
   let pkh = text2Binary(miner.wallet.getEligibilityAddress());
-
-  //miner.log(cbh);
-  //miner.log(pkh);
-  //this.log(`Check bit count: ${countMatchingBits(cbh, pkh)}. Req ${target}`);
   return countMatchingBits(cbh, pkh) >= target;
 }

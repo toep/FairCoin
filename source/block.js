@@ -140,12 +140,9 @@ module.exports = class Block {
    * Returns true if the hash of the block is less than the target
    * proof of work value.
    */
-  verifyProof(shouldPrint=null) {
+  verifyProof() {
     let h = utils.hash(this.serialize());
     let n = new BigInteger(h, 16);
-    if(shouldPrint !== null) {
-      //console.log(`compare ${n} to ${this.target}`);
-    }
     return n.compareTo(this.target) < 0;
   }
 
@@ -204,20 +201,18 @@ module.exports = class Block {
     let txFee = 0;
     tx.inputs.forEach((input) => {
       let txUXTOs = this.utxos[input.txID];
-      //console.log(txUXTOs);
-     // console.log(input.outputIndex);
       if (txUXTOs[input.outputIndex]) {
         txFee += txUXTOs[input.outputIndex].amount;
-        //console.log(`removing txid ${input.txID} at outputIndex ${input.outputIndex}`);
         this.utxos[input.txID][input.outputIndex].address = 0;
+        // Delete utxo object if all indecies are spent.
+        // This avoids issues where the outputIndex will be mismatched
         for(let i = 0; i < this.utxos[input.txID].length; i++) {
           if(this.utxos[input.txID][i].address !== 0) break;
+          // If last index, it means all addresses are 0
           if(i === this.utxos[input.txID].length-1){
             this.utxos[input.txID] = [];
           }
         }
-        //this.utxos[input.txID].splice(input.outputIndex, 1);
-        //decrease the outputIndex.. 
       }
       else {
         throw new Error("txUXTOs[input.outputIndex] not valid");
@@ -293,14 +288,13 @@ module.exports = class Block {
   }
 
   /**
-   * 
+   * Creates a coin-age transaction with all of the miners coins as input
    * @param {String} address your self address
    * @param {number} amount how much to spend, will be sent back to self again
    * @param {List} inputs a list of inputs
+   * @returns the coinage tx for the miner to add to their wallet
    */
   spendCoinAge(address, amount, inputs) {
-    //console.log(`spendCoinage input: ${inputs}`);
-    //console.log("coinage will send me " + amount + " coins");
     let output = { address, amount, chainNum: this.chainLength};
     let coinageTx = new Transaction({ outputs: [output], inputs: inputs});
     this.addTransaction(coinageTx, true);
