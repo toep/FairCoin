@@ -82,9 +82,9 @@ module.exports = class Miner extends Client {
 
         //create address to spend coin-age
         let selfAddr = this.wallet.makeAddress();
-        this.log("balance: " + this.wallet.balanceOnChain(this));
-        this.currentBlock.target = Block.determineTargetBasedOnCoinAge(this.wallet.getCoinAgeOfWalletOnChain(this));
-        this.log(`Will use target difficulty of ${20-Math.min(4, Math.floor(this.wallet.getCoinAgeOfWalletOnChain(this)))}`);
+        //this.log("balance: " + this.wallet.balanceOnChain(this));
+        this.currentBlock.target = Block.determineTargetBasedOnCoinAge(this.wallet.getCoinAgeOfWalletOnChain(this.currentBlock));
+        this.log(`Will use target difficulty of ${20-this.wallet.getCoinAgeOfWalletOnChain(this.currentBlock)}`);
         // Spend all miners balance on coin-age transaction
         // Will get all back, no fee. It is just to spend the coin-age.
         let {inputs, totalSpent} = this.wallet.spendUTXOsFully(this.wallet.balanceOnChain(this), this);
@@ -104,10 +104,8 @@ module.exports = class Miner extends Client {
       this.log(`-Unable to mint this block. Will try again in ${TIME_UNTIL_ELIGIBILITY_DECREASE/1000} seconds.`);
       this.mint_elegibility_diff_dyn--;
       this.mintingTimeout = setTimeout(() => this.emit(INIT_MINTING, reuseRewardAddress), TIME_UNTIL_ELIGIBILITY_DECREASE);
-    }
-    
+    } 
   }
-
   
 
   /**
@@ -143,12 +141,15 @@ module.exports = class Miner extends Client {
     }
   }
 
-  /**
-   * Broadcast the block, with a valid proof included.
+  /** Remove any private keys of the miner first, then
+   * broadcast the block, with a valid proof included.
    */
   announceProof() {
     let serialized = this.currentBlock.serialize(true);
+    let addresses = JSON.parse(JSON.stringify(this.wallet.addresses));
+    this.wallet.removePrivateKeys();
     this.broadcast(PROOF_FOUND, {block: serialized, miner: this});
+    this.wallet.addresses = addresses;
   }
 
   /**
@@ -174,7 +175,7 @@ module.exports = class Miner extends Client {
       }
     }
     // FIXME: Should verify that a block chains back to a previously accepted block.
-    if (!b.verifyProof()) {
+    if (!b.verifyProof(miner)) {
       return false;
     }
     return true;

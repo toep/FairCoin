@@ -80,9 +80,7 @@ module.exports = class Block {
   }
 
   static determineTargetBasedOnCoinAge(coinAge) {
-    //clamp coinage to 4 max
-    coinAge = Math.min(4, coinAge);
-    return POW_BASE_TARGET.shiftRight(NUM_ZEROES_DEFAULT-Math.floor(coinAge));
+    return POW_BASE_TARGET.shiftRight(NUM_ZEROES_DEFAULT-coinAge);
   }
 
   /**
@@ -139,8 +137,18 @@ module.exports = class Block {
   /**
    * Returns true if the hash of the block is less than the target
    * proof of work value.
+   * @param {Miner} miner the miner that created the proof. Is null if local
    */
-  verifyProof() {
+  verifyProof(miner = null) {
+    //TODO: do something with the miners context to figure out the target
+    if(miner !== null) {
+      let prevBlock = miner.previousBlocks[this.prevBlockHash];
+      let coinAge = miner.wallet.getCoinAgeOfWalletOnChain(prevBlock);
+      let calculatedDifficulty = Block.determineTargetBasedOnCoinAge(coinAge);
+      //verify the coin-age is spent also
+      if(!miner.wallet.hasFullySpentCoinage(this)) throw new Error("Miner did not spend all their utxos coin-age before mining!");
+      if(parseInt(calculatedDifficulty, 10) != parseInt(this.target, 10)) throw new Error("Target difficulty does not match calculated based on previous block coin-age");
+    }
     let h = utils.hash(this.serialize());
     let n = new BigInteger(h, 16);
     return n.compareTo(this.target) < 0;

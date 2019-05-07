@@ -216,14 +216,39 @@ module.exports = class Wallet {
     this.eligibility_address = utils.hash(total_add);
   }
 
-  getCoinAgeOfWalletOnChain(miner) {
-    let block = miner.currentBlock;
+  /**
+   * returns the coin-age of a wallet on a given block
+   * @param {Block} block 
+   */
+  getCoinAgeOfWalletOnChain(block) {
     let utxos = block.getAllAgedUTXOsBelongingTo(this);
     let total = 0;
     utxos.forEach(utxo => {
       total += coinAgeOf(utxo, block);
     });
-    return total;
+    return Math.min(4, Math.floor(total));
+  }
+
+  /**
+   * 
+   * @param {Block} block - the block to check 
+   */
+  hasFullySpentCoinage(block){
+    let utxos = block.getAllAgedUTXOsBelongingTo(this);
+    utxos.forEach(utxo => {
+      if(utxos.chainNum !== block.chainLength) return false;
+    });
+    return true;
+  }
+
+  /**
+   * Removes all private keys on the wallet
+   * This is needed before sending the miner context to the verifiers
+   */
+  removePrivateKeys() {
+    Object.keys(this.addresses).forEach(key => {
+      this.addresses[key].private = null;
+    });
   }
 
   /**
@@ -239,5 +264,5 @@ module.exports = class Wallet {
 }
 
 function coinAgeOf(utxo, block) {
-  return utxo.amount/1000.0 * (block.chainLength - utxo.chainNum-1)
+  return Math.max(0, utxo.amount/1000.0 * (block.chainLength - utxo.chainNum-2))
 }
